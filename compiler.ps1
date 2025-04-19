@@ -4,74 +4,110 @@ param (
 )
 
 $dataSection = New-Object System.Collections.Generic.List[string]
-$textSection = New-Object System.Collections.Generic.List[string]
 $output = New-Object System.Collections.Generic.List[string]
+$suspiciousLines = New-Object System.Collections.Generic.List[string]
+$variables = @{}
 
-$foundPrintf = $false  # Flag to track if printf was used
+$foundPrintf = $false
+$returnValue = $null
 
-# Add externs and globals first, as per your request
 $output.Add("global main")
-$output.Add("")  # Blank line between sections
+$output.Add("")
 
-# Check if printf() exists in input file and handle accordingly
 $lines = Get-Content $InputFile
 
-# Add .data section if any printf calls are found
+# First pass: store variable declarations
 foreach ($line in $lines) {
     $trimmed = $line.Trim()
 
-    # Match printf("..."); lines
-    if ($trimmed -match '^\s*printf\s*\(\s*"([^"]+)"\s*\)\s*;.*$') {
-        $foundPrintf = $true
-
-        $str = $matches[1]
-        
-        # Ensure the string is enclosed in backquotes (`` ` ``) for NASM
-        $convertedStr = '`' + $str + '`'  # Manually use backquotes here instead of double quotes
-
-        # Create a label for the string
-        $label = "msg$($dataSection.Count)"
-        
-        # Add the converted string to the .data section with backquotes
-        $dataSection.Add("    $label db $convertedStr, 0")
+    # Detect int variable declarations like: int x = 5;
+    if ($trimmed -match '^\s*int\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*(\d+)\s*;\s*$') {
+        $varName = $matches[1]
+        $varValue = [int]$matches[2]
+        $variables[$varName] = $varValue
     }
 }
 
-# Only add .data section if printf was used
+# Second pass: process printf, return, and typos
+foreach ($line in $lines) {
+    $trimmed = $line.Trim()
+
+    # Detect return value: return <literal or variable>;
+    if ($trimmed -match '^\s*return\s+([a-zA-Z_][a-zA-Z0-9_]*|\d+)\s*;\s*$') {
+        $ret = $matches[1]
+        if ($ret -match '^\d+$') {
+            $returnValue = [int]$ret
+        } elseif ($variables.ContainsKey($ret)) {
+            $returnValue = $variables[$ret]
+        } else {
+            $suspiciousLines.Add("⚠️ Unknown variable in return: $ret")
+        }
+        continue
+    }
+
+    # Match valid printf("..."); lines
+    if ($trimmed -match '^\s*printf\s*\(\s*"([^"]+)"\s*\)\s*;.*$') {
+        $foundPrintf = $true
+        $str = $matches[1]
+        $convertedStr = '`' + $str + '`'
+        $label = "msg$($dataSection.Count)"
+        $dataSection.Add("    $label db $convertedStr, 0")
+        continue
+    }
+
+    # Detect typos
+    if ($trimmed -match '\bmajn\s*\(' -or $trimmed -match '\bprintd\s*\(') {
+        $suspiciousLines.Add("Possible typo detected: $trimmed")
+    }
+
+    if ($trimmed -match '\b(pr.n.tf|p.*ntf|pr.*df)\s*\(' -and -not ($trimmed -match 'printf\s*\(')) {
+        $suspiciousLines.Add("Suspicious printf variant: $trimmed")
+    }
+}
+
+# Show typo or logic warnings
+if ($suspiciousLines.Count -gt 0) {
+    Write-Warning "⚠️ Issues found in your code:"
+    $suspiciousLines | ForEach-Object { Write-Host "  $_" }
+    Write-Host ""
+}
+
+# Add externs and data section if needed
 if ($foundPrintf) {
     $output.Add("extern printf")
     $output.Add("section .data")
     $output.AddRange($dataSection)
-    $output.Add("")  # Blank line after .data section
+    $output.Add("")
 }
 
-# Add .text section and main function
+# Code section
 $output.Add("section .text")
 $output.Add("main:")
+$output.Add("    sub rsp, 40")
 
-# Adding the necessary instructions for main
-$output.Add("    sub rsp, 40")  # Windows ABI shadow space
-
-# Add printf calls for each string in .data
+# Insert printf calls
 if ($foundPrintf) {
     for ($i = 0; $i -lt $dataSection.Count; $i++) {
-        $output.Add("    lea rcx, [rel msg$i]")  # Load address of the string into rcx
-        $output.Add("    call printf")  # Call printf with the string
+        $output.Add("    lea rcx, [rel msg$i]")
+        $output.Add("    call printf")
     }
 }
 
-# End of main function: clean up and return
-$output.Add("    add rsp, 40")  # Restore stack space
-$output.Add("    xor eax, eax")  # Return value 0
-$output.Add("    ret")  # Return from main
+# Final return logic
+$output.Add("    add rsp, 40")
 
-# Write the output to the .asm file
+if ($null -ne $returnValue) {
+    $output.Add("    mov eax, $returnValue")
+} else {
+    $output.Add("    xor eax, eax")
+}
+
+$output.Add("    ret")
+
+# Write out the result
 Set-Content -Path $OutputFile -Value $output -Encoding UTF8
+Write-Host "✅ Generated $OutputFile with printf, return, and variable support"
 
-Write-Host "✅ Generated $OutputFile using printf, with special characters handled"
-
-# Execute NASM
+# Compile
 nasm -f win64 output.asm -o output.obj
-
-# Execute GCC to link the object file and generate the executable
 gcc output.obj -o output.exe
