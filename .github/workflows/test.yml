@@ -1,0 +1,67 @@
+name: Test C-to-ASM Compiler
+
+on: [push, pull_request, workflow_dispatch]
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🧰 Install NASM
+        uses: ilammy/setup-nasm@v1
+
+      - name: 🛠 Set up MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >
+            mingw-w64-ucrt-x86_64-gcc
+
+      - name: 🧪 Run tests with output comparison
+        shell: pwsh
+        run: |
+          $script = ".\compiler.ps1"
+          $testFiles = Get-ChildItem -Path "tests" -Filter *.c
+
+          foreach ($file in $testFiles) {
+              $basename = [System.IO.Path]::GetFileNameWithoutExtension($file.Name)
+              $expectedFile = "tests\$basename.txt"
+
+              Write-Host "`n🔧 Testing $($file.Name)"
+
+              Copy-Item $file.FullName input.c -Force
+              & $script
+
+              if (-not (Test-Path ".\output.exe")) {
+                  throw "❌ Failed to generate output.exe for $($file.Name)"
+              }
+
+              $actual = & .\output.exe | Out-String
+              $actual = $actual.Trim()
+
+              # Check if the expected file exists
+              if (Test-Path $expectedFile) {
+                  $expectedContent = Get-Content $expectedFile -Raw
+                  if ($expectedContent -ne $null) {
+                      $expected = $expectedContent.Trim()
+                  } else {
+                      $expected = ""
+                  }
+
+                  if ($actual -ne $expected) {
+                      Write-Host "❌ Output mismatch for $($file.Name)"
+                      Write-Host "--- Expected:"
+                      Write-Host $expected
+                      Write-Host "--- Actual:"
+                      Write-Host $actual
+                      throw "Test failed."
+                  } else {
+                      Write-Host "✅ Output matched expected."
+                  }
+              } else {
+                  Write-Host "⚠️ No expected output file for $($file.Name), skipping comparison."
+              }
+          }
