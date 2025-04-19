@@ -1,17 +1,17 @@
+extern printf
+global main
+
 section .data
-str0 db `Hello, world!\n`, 0
-str1 db `Another line.\n`, 0
+    msg0 db `Hello, world!\n`, 0
+    msg1 db `Another line.\n`, 0
 
 section .text
-global main
-extern printf
-
 main:
     sub rsp, 40
-    lea rcx, [rel str0]
+    lea rcx, [rel msg0]
     call printf
-    lea rcx, [rel str1]
+    lea rcx, [rel msg1]
     call printf
-    xor eax, eax
     add rsp, 40
+    xor eax, eax
     ret
