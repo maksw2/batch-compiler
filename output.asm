@@ -1,17 +1,19 @@
 global main
 
-extern printf
-section .data
-    msg0 db `Hello, world!\n`, 0
-    msg1 db `Another line.\n`, 0
-
 section .text
 main:
     sub rsp, 40
-    lea rcx, [rel msg0]
-    call printf
-    lea rcx, [rel msg1]
-    call printf
+    mov ebx, 2
+    mov eax, 2
+    mov ecx, 16
+    mov ebx, 1
+.powx:
+    test ecx, ecx
+    jz .powx_done
+    imul ebx, eax
+    dec ecx
+    jmp .powx
+.powx_done:
     add rsp, 40
-    mov eax, 42
+    mov eax, ebx
     ret
