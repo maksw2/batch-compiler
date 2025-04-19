@@ -1,3 +1,0 @@
-section .data
-    msg db "", 10, 0
-    msg db "", 10, 0
